@@ -70,7 +70,7 @@ Create `.env` file in `apps/backend/`:
 ```env
 MONGODB_URI=mongodb://localhost:27017/poll-automation
 # OR for MongoDB Atlas:
-# MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/poll-automation
+# MONGODB_URI=your_mongodb_connection_string_here
 ```
 
 ### 4. Start the Application
