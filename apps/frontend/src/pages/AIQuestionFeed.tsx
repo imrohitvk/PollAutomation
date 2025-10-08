@@ -3,7 +3,7 @@ import { motion } from "framer-motion"
 import { useNavigate } from "react-router-dom"
 import { 
   Edit3, Settings, Brain, Loader, 
-  Plus, Send, RefreshCw, FileText,
+  Plus, Send, FileText,
   BarChart3, CheckCircle, Zap, Trash2,
   Play
 } from "lucide-react"
@@ -12,6 +12,7 @@ import GlassCard from "../components/GlassCard"
 import { useAuth } from "../contexts/AuthContext"
 import { toast } from "react-hot-toast"
 import { useTranscriptCapture } from "../hooks/useTranscriptCapture"
+import { useAutoQuestions } from "../hooks/useAutoQuestions"
 import { LocalTranscriptManager } from "../utils/localTranscripts"
 import { generateQuestionsWithGemini } from "../utils/geminiQuestions"
 import { injectDemoTranscripts } from "../utils/demoTranscripts"
@@ -151,6 +152,17 @@ const AIQuestionFeed = () => {
   const [questionCapability, setQuestionCapability] = useState<QuestionCapability | null>(null);
   const [generatedQuestions, setGeneratedQuestions] = useState<GeneratedQuestionSet | null>(null);
   
+  // Auto-generated questions from segments
+  const { 
+    questionSegments, 
+    isConnected, 
+    getTotalQuestionCount,
+    clearQuestions
+  } = useAutoQuestions({
+    meetingId: activeRoom?._id || '',
+    enabled: !!activeRoom
+  });
+  
   // Configuration state
   const [config, setConfig] = useState<QuestionConfig>({
     numQuestions: 5,
@@ -160,6 +172,15 @@ const AIQuestionFeed = () => {
     includeExplanations: true,
     pointsPerQuestion: 1
   });
+
+  // Clear questions with user feedback
+  const handleClearQuestions = () => {
+    const questionCount = getTotalQuestionCount();
+    clearQuestions();
+    toast.success(`🧹 Cleared ${questionCount} auto-generated questions from UI`, {
+      duration: 3000
+    });
+  };
 
   // Room management functions
   const handleCreateSession = () => {
@@ -386,7 +407,8 @@ const AIQuestionFeed = () => {
     }
   };
 
-  const launchQuestion = async (questionId: string) => {
+  const launchQuestion = async (questionOrId: string | any) => {
+    const questionId = typeof questionOrId === 'string' ? questionOrId : questionOrId.id;
     console.log('🚀 [AI-LAUNCH] Starting launch process for question:', questionId);
     
     if (!activeRoom) {
@@ -401,21 +423,29 @@ const AIQuestionFeed = () => {
       return;
     }
 
-    if (!generatedQuestions) {
-      console.error('❌ [AI-LAUNCH] No generated questions');
-      toast.error("No questions available to launch");
-      return;
-    }
-
     console.log('✅ [AI-LAUNCH] Prerequisites check passed');
     console.log('🏠 [AI-LAUNCH] Active room:', activeRoom._id);
     console.log('🔌 [AI-LAUNCH] Socket connected:', socket.connected);
 
     try {
-      const question = generatedQuestions.questions.find(q => q.id === questionId);
-      if (!question) {
-        console.error('❌ [AI-LAUNCH] Question not found:', questionId);
-        toast.error("Question not found");
+      let question;
+      
+      // Handle auto-generated questions (object passed directly)
+      if (typeof questionOrId === 'object') {
+        question = questionOrId;
+        console.log('📝 [AI-LAUNCH] Using auto-generated question:', question);
+      } 
+      // Handle manual questions (string ID passed)
+      else if (generatedQuestions) {
+        question = generatedQuestions.questions.find(q => q.id === questionId);
+        if (!question) {
+          console.error('❌ [AI-LAUNCH] Question not found:', questionId);
+          toast.error("Question not found");
+          return;
+        }
+      } else {
+        console.error('❌ [AI-LAUNCH] No generated questions and no direct question provided');
+        toast.error("No questions available to launch");
         return;
       }
 
@@ -429,16 +459,53 @@ const AIQuestionFeed = () => {
       if (question.type === 'multiple_choice' && question.options) {
         pollType = 'mcq';
         options = question.options;
-        // Convert index to actual option text to match manual poll format
-        if (typeof question.correctAnswer === 'number') {
+        
+        // Handle auto-generated questions (from useAutoQuestions hook) with correctIndex
+        if (typeof question.correctIndex === 'number' && question.correctIndex >= 0 && question.correctIndex < question.options.length) {
+          correctAnswer = question.options[question.correctIndex];
+          console.log('🎯 [AI-LAUNCH] Using correctIndex for auto-generated question:', question.correctIndex, '→', correctAnswer);
+        }
+        // Handle manual questions with correctAnswer
+        else if (typeof question.correctAnswer === 'number') {
+          // If it's a numeric index, use it directly
           correctAnswer = question.options[question.correctAnswer] || question.correctAnswer.toString();
+        } else if (typeof question.correctAnswer === 'string') {
+          // If it's a letter (A, B, C, D), convert to index then to option text
+          const letterToIndex = { 'A': 0, 'B': 1, 'C': 2, 'D': 3 };
+          const answerIndex = letterToIndex[question.correctAnswer.toUpperCase() as keyof typeof letterToIndex];
+          if (answerIndex !== undefined && question.options[answerIndex]) {
+            correctAnswer = question.options[answerIndex];
+          } else {
+            // Fallback: try to match the correctAnswer directly with options
+            correctAnswer = question.correctAnswer;
+          }
         } else {
-          correctAnswer = question.correctAnswer;
+          // Final fallback - use first option if no valid answer found
+          console.warn('⚠️ [AI-LAUNCH] No valid correctAnswer or correctIndex found, using first option as fallback');
+          correctAnswer = question.options[0];
         }
       } else if (question.type === 'true_false') {
         pollType = 'truefalse';
         options = ['True', 'False'];
-        correctAnswer = question.correctAnswer === 'true' || question.correctAnswer === 1 ? 'True' : 'False';
+        
+        // Handle auto-generated questions with correctIndex
+        if (typeof question.correctIndex === 'number') {
+          correctAnswer = question.correctIndex === 0 ? 'True' : 'False';
+          console.log('🎯 [AI-LAUNCH] Using correctIndex for true/false question:', question.correctIndex, '→', correctAnswer);
+        }
+        // Handle manual questions with correctAnswer string
+        else if (typeof question.correctAnswer === 'string') {
+          correctAnswer = question.correctAnswer === 'true' || question.correctAnswer.toLowerCase() === 'true' ? 'True' : 'False';
+        }
+        // Handle manual questions with correctAnswer number
+        else if (typeof question.correctAnswer === 'number') {
+          correctAnswer = question.correctAnswer === 1 ? 'True' : 'False';
+        }
+        else {
+          // Fallback to True if no valid answer found
+          console.warn('⚠️ [AI-LAUNCH] No valid correctAnswer or correctIndex found for true/false, using True as fallback');
+          correctAnswer = 'True';
+        }
       } else {
         console.error('❌ [AI-LAUNCH] Unsupported question type:', question.type);
         toast.error('Short answer questions are not supported for live polls yet');
@@ -461,6 +528,12 @@ const AIQuestionFeed = () => {
         pollType: pollType,
         optionsCount: options.length
       });
+      console.log('🔍 [AI-LAUNCH] DETAILED CORRECTANSWER DEBUG:');
+      console.log('🔍 [AI-LAUNCH] correctAnswer value:', `"${correctAnswer}"`);
+      console.log('🔍 [AI-LAUNCH] correctAnswer length:', correctAnswer?.length);
+      console.log('🔍 [AI-LAUNCH] correctAnswer chars:', correctAnswer?.split('').map(c => `'${c}' (${c.charCodeAt(0)})`));
+      console.log('🔍 [AI-LAUNCH] options array:', options);
+      console.log('🔍 [AI-LAUNCH] options detail:', options.map((opt, idx) => `[${idx}]: "${opt}" (len: ${opt.length})`));
 
       // Create poll in database
       const response = await apiService.createPoll(pollData);
@@ -517,11 +590,11 @@ const AIQuestionFeed = () => {
             </button>
             
             <button
-              onClick={fetchTranscriptSummary}
-              className="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg flex items-center space-x-2 transition-colors"
+              onClick={handleClearQuestions}
+              className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg flex items-center space-x-2 transition-colors"
             >
-              <RefreshCw className="w-4 h-4" />
-              <span>Refresh</span>
+              <Trash2 className="w-4 h-4" />
+              <span>Clear Questions</span>
             </button>
             
             <button
@@ -578,16 +651,116 @@ const AIQuestionFeed = () => {
                 >
                     <Trash2 size={14}/> End This Session
                 </button>
-                <button 
+                {/* <button 
                     onClick={testSocketConnection} 
                     className="text-blue-400 text-sm hover:underline flex items-center gap-1"
                 >
                     🧪 Debug Connection
-                </button>
+                </button> */}
               </div>
             </div>
           )}
         </GlassCard>
+
+        {/* Auto-Generated Questions Section */}
+        {questionSegments.length > 0 && (
+          <GlassCard className="p-6">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 bg-gradient-to-br from-green-600 to-emerald-600 rounded-xl flex items-center justify-center">
+                  <Zap className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-white">Auto-Generated Questions</h2>
+                  <p className="text-gray-400">
+                    📘 {getTotalQuestionCount()} questions from {questionSegments.length} segments
+                    {isConnected && <span className="text-green-400 ml-2">• Live</span>}
+                  </p>
+                </div>
+              </div>
+              
+              <button
+                onClick={handleClearQuestions}
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-lg flex items-center space-x-2 transition-colors"
+                title="Clear all auto-generated questions from UI"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Clear Questions</span>
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {questionSegments.map((segment) => (
+                <div key={segment.segmentId} className="bg-black/20 rounded-lg p-4 border border-gray-700/50">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-lg font-semibold text-white">
+                      Segment {segment.segmentNumber}
+                    </h3>
+                    <span className="text-xs text-gray-400">
+                      {segment.questions.length} questions • {new Date(segment.generatedAt).toLocaleTimeString()}
+                    </span>
+                  </div>
+                  
+                  {segment.summary && (
+                    <p className="text-gray-300 text-sm mb-4 italic">"{segment.summary}"</p>
+                  )}
+
+                  <div className="space-y-3">
+                    {segment.questions.map((question) => (
+                      <div key={question.id} className="bg-white/5 rounded-lg p-3 border border-gray-600/30">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center space-x-2 mb-2">
+                              <span className="text-xs bg-blue-500/20 text-blue-300 px-2 py-1 rounded-full">
+                                {question.type.replace('_', ' ').toUpperCase()}
+                              </span>
+                              <span className="text-xs bg-gray-600/30 text-gray-300 px-2 py-1 rounded-full">
+                                {question.difficulty.toUpperCase()}
+                              </span>
+                            </div>
+                            <p className="text-white font-medium mb-2">{question.questionText}</p>
+                            
+                            {question.options && (
+                              <div className="space-y-1">
+                                {question.options.map((option, optIndex) => (
+                                  <div key={optIndex} className="text-sm text-gray-300 flex items-center space-x-2">
+                                    <span className="w-6 h-6 bg-gray-700 rounded-full flex items-center justify-center text-xs">
+                                      {String.fromCharCode(65 + optIndex)}
+                                    </span>
+                                    <span>{option}</span>
+                                    {question.correctIndex === optIndex && (
+                                      <CheckCircle className="w-4 h-4 text-green-400" />
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            
+                            {question.explanation && (
+                              <div className="mt-2 p-2 bg-blue-500/10 rounded border-l-2 border-blue-500">
+                                <p className="text-xs text-gray-300">
+                                  <strong>Explanation:</strong> {question.explanation}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                          
+                          <button
+                            onClick={() => launchQuestion(question)}
+                            className="ml-4 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center space-x-2 transition-colors text-sm"
+                          >
+                            <Play className="w-4 h-4" />
+                            <span>Launch</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </GlassCard>
+        )}
 
         {/* Progress Steps */}
         <div className="flex items-center space-x-8 mb-8">
@@ -817,9 +990,9 @@ const AIQuestionFeed = () => {
                       </div>
                       <button
                         onClick={() => launchQuestion(question.id)}
-                        className="px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg flex items-center space-x-1 transition-colors"
+                        className="px-6 py-3 bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 text-white font-medium rounded-lg flex items-center space-x-2 transition-all"
                       >
-                        <Send className="w-3 h-3" />
+                        <Send className="w-3 h-5" />
                         <span>Launch</span>
                       </button>
                     </div>
@@ -877,7 +1050,7 @@ const AIQuestionFeed = () => {
                 ))}
               </div>
 
-              <div className="mt-8 flex justify-end">
+              {/* <div className="mt-8 flex justify-end">
                 <button
                   onClick={launchAllQuestions}
                   className="px-6 py-3 bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 text-white font-medium rounded-lg flex items-center space-x-2 transition-all"
@@ -885,7 +1058,15 @@ const AIQuestionFeed = () => {
                   <Send className="w-5 h-5" />
                   <span>Launch All Questions</span>
                 </button>
-              </div>
+              </div> 
+                <button
+                        onClick={() => launchQuestion(question.id)}
+                        className="px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm rounded-lg flex items-center space-x-1 transition-colors"
+                      >
+                        <Send className="w-3 h-3" />
+                        <span>Launch</span>
+                      </button>
+              */}
             </div>
           </GlassCard>
         )}

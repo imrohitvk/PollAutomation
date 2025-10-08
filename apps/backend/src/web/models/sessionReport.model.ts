@@ -11,7 +11,8 @@ export interface IStudentSessionResult {
     pollsAttempted: number;
     correctAnswers: number;
     totalPoints: number;
-    streak: number; // Longest correct answer streak in the session
+    streak: number; // Current streak (consecutive correct answers from the end)
+    longestStreak?: number; // Longest streak achieved in the session
     averageTime: number; // Average time taken for answered questions
     accuracy: number; // Percentage of correct answers
 }
@@ -35,6 +36,7 @@ const StudentSessionResultSchema = new Schema<IStudentSessionResult>({
     correctAnswers: { type: Number, required: true },
     totalPoints: { type: Number, required: true },
     streak: { type: Number, required: true },
+    longestStreak: { type: Number, default: 0 },
     averageTime: { type: Number, required: true },
     accuracy: { type: Number, required: true },
 }, { _id: false });

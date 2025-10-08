@@ -16,7 +16,9 @@ interface StudentResult {
   pollsAttempted: number;
   totalPolls: number;
   averageTime: number;
-  streak: number;
+  streak: number; // Current streak
+  correctAnswers: number; // Number of correct answers
+  longestStreak?: number; // Optional longest streak
   rank?: number;
   isCurrentUser?: boolean;
 }
@@ -40,10 +42,12 @@ const LeaderboardView: React.FC<LeaderboardViewProps> = ({ reportData, sessionNa
       'Rank': result.rank,
       'Name': result.studentName,
       'Total Points': result.totalPoints,
+      'Correct Answers': result.correctAnswers || 0,
       'Accuracy (%)': result.accuracy.toFixed(1),
       'Polls Answered': `${result.pollsAttempted} / ${result.totalPolls}`,
       'Average Time (s)': result.averageTime.toFixed(2),
-      'Longest Streak': result.streak,
+      'Current Streak': result.streak,
+      'Longest Streak': result.longestStreak || result.streak,
     }));
     
     const worksheet = XLSX.utils.json_to_sheet(dataToExport);
@@ -83,10 +87,10 @@ const LeaderboardView: React.FC<LeaderboardViewProps> = ({ reportData, sessionNa
                       <th className="p-3">Rank</th>
                       <th className="p-3">Student</th>
                       <th className="p-3 text-center">Total Points</th>
+                      <th className="p-3 text-center">Correct/Total</th>
                       <th className="p-3 text-center">Accuracy</th>
-                      <th className="p-3 text-center">Polls Attempted</th>
                       <th className="p-3 text-center">Avg. Time</th>
-                      <th className="p-3 text-center">Streak</th>
+                      <th className="p-3 text-center">Current Streak</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -95,10 +99,22 @@ const LeaderboardView: React.FC<LeaderboardViewProps> = ({ reportData, sessionNa
                         <td className="p-3 font-bold">{getRankIcon(student.rank || 0)}</td>
                         <td className="p-3 font-semibold">{student.studentName}</td>
                         <td className="p-3 text-center font-bold text-primary-300">{student.totalPoints}</td>
-                        <td className="p-3 text-center">{student.accuracy.toFixed(0)}%</td>
-                        <td className="p-3 text-center">{student.pollsAttempted} / {student.totalPolls}</td>
-                        <td className="p-3 text-center">{student.averageTime}s</td>
-                        <td className="p-3 text-center">{student.streak}</td>
+                        <td className="p-3 text-center">
+                          <span className="text-green-400 font-semibold">{student.correctAnswers || 0}</span>
+                          <span className="text-gray-400 mx-1">/</span>
+                          <span className="text-gray-300">{student.pollsAttempted}</span>
+                        </td>
+                        <td className="p-3 text-center">
+                          <span className={`font-semibold ${student.accuracy >= 80 ? 'text-green-400' : student.accuracy >= 60 ? 'text-yellow-400' : 'text-red-400'}`}>
+                            {student.accuracy.toFixed(1)}%
+                          </span>
+                        </td>
+                        <td className="p-3 text-center">{student.averageTime.toFixed(1)}s</td>
+                        <td className="p-3 text-center">
+                          <span className={`font-bold ${student.streak >= 3 ? 'text-yellow-400' : student.streak >= 1 ? 'text-green-400' : 'text-gray-400'}`}>
+                            {student.streak}
+                          </span>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

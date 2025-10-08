@@ -5,6 +5,7 @@ import connectDB from "./web/config/dbconnect";
 import { Server } from 'socket.io';
 import { setupWebSocket } from './websocket/setup';
 import ASRWebSocketServer from './websocket/asrHandler';
+import ServiceManager from './services/serviceManager';
 
 const PORT = process.env.PORT || 8000;
 
@@ -18,6 +19,9 @@ const io = new Server(server, {
     }
 });
 setupWebSocket(io);
+
+// Initialize services with Socket.IO instance
+ServiceManager.getInstance().initializeServices(io);
 
 // Initialize ASR WebSocket Server
 const asrServer = new ASRWebSocketServer(server);

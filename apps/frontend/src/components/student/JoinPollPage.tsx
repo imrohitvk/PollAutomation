@@ -163,6 +163,8 @@ const JoinPollPage: React.FC = () => {
         
         socket.emit('student-join-room', roomInfo.code, (response: { success?: boolean; error?: string; room?: RoomInfo }) => {
             console.log('📥 Received response:', response);
+            console.log('📊 Response room details:', response?.room);
+            console.log('🆔 Response room ID field:', response?.room?._id);
             clearTimeout(timeoutId);
             setIsJoining(false);
             
@@ -172,10 +174,13 @@ const JoinPollPage: React.FC = () => {
                 setError(response.error);
             } else if (response?.success && response?.room) {
                 console.log('✅ Success! Joined room:', response.room);
+                console.log('🔍 Room object keys:', Object.keys(response.room));
+                console.log('💾 Navigating with updated room info that includes _id:', response.room._id);
                 toast.success(`Successfully joined "${response.room.name}"!`);
                 navigate(`/student/poll-questions`, { state: { roomInfo: response.room } });
             } else {
                 console.log('🤔 Unexpected response format:', response);
+                console.log('⚠️ Falling back to original roomInfo without _id');
                 // Navigate anyway with the room info we have
                 navigate(`/student/poll-questions`, { state: { roomInfo } });
             }

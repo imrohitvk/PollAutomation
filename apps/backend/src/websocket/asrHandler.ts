@@ -578,6 +578,41 @@ class ASRWebSocketServer {
         timestamp: Date.now()
       });
 
+      // **NEW: Automatically trigger question generation for the saved transcripts**
+      // This happens asynchronously - don't wait for it to complete
+      if (savedCount > 0 && message.meetingId) {
+        setImmediate(async () => {
+          try {
+            // Import ServiceManager here to avoid circular dependencies
+            const ServiceManager = require('../services/serviceManager').default;
+            const autoQuestionService = ServiceManager.getInstance().getAutoQuestionService();
+            
+            // Combine all transcript texts into a single segment
+            const combinedText = (message.transcripts || [])
+              .map((t: any) => t.text)
+              .join(' ')
+              .trim();
+            
+            if (combinedText.length > 0) {
+              console.log(`🤖 [AUTO-QUESTIONS] Triggering automatic question generation for ${savedCount} transcripts`);
+              console.log(`📝 [AUTO-QUESTIONS] Combined text length: ${combinedText.length} characters`);
+              
+              await autoQuestionService.generateQuestionsForTranscripts(
+                combinedText,
+                message.meetingId
+              );
+              
+              console.log(`✅ [AUTO-QUESTIONS] Question generation completed for meeting: ${message.meetingId}`);
+            } else {
+              console.log(`⚠️ [AUTO-QUESTIONS] No text content to generate questions from`);
+            }
+          } catch (error) {
+            console.error(`❌ [AUTO-QUESTIONS] Failed to generate questions for transcripts:`, error);
+            // Don't fail the transcript save if question generation fails
+          }
+        });
+      }
+
     } catch (error) {
       console.error('❌ Failed to save transcripts:', error);
       this.sendError(ws, `Failed to save transcripts: ${error instanceof Error ? error.message : 'Unknown error'}`);

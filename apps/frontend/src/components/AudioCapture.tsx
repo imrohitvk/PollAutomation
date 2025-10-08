@@ -19,6 +19,8 @@ import {
 import DashboardLayout from '../components/DashboardLayout';
 import GlassCard from '../components/GlassCard';
 import { useTranscriptCapture } from '../hooks/useTranscriptCapture';
+import { useTranscriptSegmentation } from '../hooks/useTranscriptSegmentation';
+import { useAutoQuestions } from '../hooks/useAutoQuestions';
 import GuestLinkGenerator from '../components/host/GuestLinkGenerator';
 import { Toaster, toast } from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -40,7 +42,40 @@ type RecordingStatus = 'stopped' | 'connecting' | 'connected' | 'recording' | 'p
 const AudioCapture = () => {
   const { user, activeRoom } = useAuth();
   const [status, setStatus] = useState<RecordingStatus>('stopped');
-  const [transcriptLines, setTranscriptLines] = useState<TranscriptLine[]>([]);
+  
+  // Create unique storage key for this session
+  const sessionStorageKey = `transcript-session-${activeRoom?._id || 'no-room'}`;
+  
+  // Initialize transcript lines with persistence
+  const [transcriptLines, setTranscriptLines] = useState<TranscriptLine[]>(() => {
+    // Try to restore transcript lines from localStorage on component mount
+    try {
+      const savedTranscripts = localStorage.getItem(sessionStorageKey);
+      if (savedTranscripts) {
+        const parsed = JSON.parse(savedTranscripts);
+        console.log(`📋 [AUDIOCAPTURE] Restored ${parsed.length} transcript lines from previous session`);
+        return parsed;
+      }
+    } catch (error) {
+      console.warn('⚠️ [AUDIOCAPTURE] Failed to restore transcript lines:', error);
+    }
+    return [];
+  });
+  
+  // Initialize status with potential restoration from previous session
+  const [restoredStatus, setRestoredStatus] = useState<RecordingStatus>(() => {
+    try {
+      const savedStatus = localStorage.getItem(`${sessionStorageKey}-status`);
+      if (savedStatus && (savedStatus === 'recording' || savedStatus === 'connected')) {
+        console.log(`🔄 [AUDIOCAPTURE] Found previous recording session with status: ${savedStatus}`);
+        return savedStatus as RecordingStatus;
+      }
+    } catch (error) {
+      console.warn('⚠️ [AUDIOCAPTURE] Failed to restore session status:', error);
+    }
+    return 'stopped';
+  });
+  
   const [includeSystemAudio, setIncludeSystemAudio] = useState(false);
   const [selectedMic, setSelectedMic] = useState('default');
   const [waveformData, setWaveformData] = useState<number[]>(Array(50).fill(0));
@@ -48,6 +83,7 @@ const AudioCapture = () => {
   const [isExporting, setIsExporting] = useState(false);
   const [showDebugPanel, setShowDebugPanel] = useState(true); // Show debug info
   const [isHostMuted, setIsHostMuted] = useState(false); // Host mute state for guest speech
+  const [dismissedSegments, setDismissedSegments] = useState<Set<number>>(new Set()); // Track dismissed notifications
   const [debugInfo, setDebugInfo] = useState({
     speechApiSupported: false,
     speechApiInitialized: false,
@@ -72,10 +108,116 @@ const AudioCapture = () => {
     !!activeRoom // Only enable if room exists
   );
   
+  // Initialize transcript segmentation for automatic 10-second pause detection
+  const { segmentationState, saveTranscriptSegment } = useTranscriptSegmentation(
+    activeRoom?._id || 'no-room',
+    status === 'recording', // Only active when recording
+    transcriptLines, // Pass current transcripts to the hook
+    10000 // 10 seconds pause threshold
+  );
+
+  // Initialize auto questions for real-time question generation
+  const { 
+    questionSegments, 
+    lastGeneratedSegment, 
+    getTotalQuestionCount,
+    clearQuestions 
+  } = useAutoQuestions({
+    meetingId: activeRoom?._id || 'no-room',
+    enabled: !!activeRoom && status === 'recording'
+  });
+  
+  // Debug log to see what transcripts are being passed
+  useEffect(() => {
+    if (status === 'recording') {
+      console.log(`📤 [AUDIOCAPTURE] Passing to segmentation: ${transcriptLines.length} transcripts, final count: ${transcriptLines.filter(t => t.isFinal).length}`);
+      if (transcriptLines.length > 0) {
+        console.log(`📤 [AUDIOCAPTURE] Sample transcript:`, transcriptLines[0]);
+      }
+    }
+  }, [transcriptLines, status]);
+  
+  // Persist transcript lines to localStorage whenever they change
+  useEffect(() => {
+    if (transcriptLines.length > 0) {
+      try {
+        localStorage.setItem(sessionStorageKey, JSON.stringify(transcriptLines));
+        console.log(`💾 [AUDIOCAPTURE] Persisted ${transcriptLines.length} transcript lines to localStorage`);
+      } catch (error) {
+        console.warn('⚠️ [AUDIOCAPTURE] Failed to persist transcript lines:', error);
+      }
+    }
+  }, [transcriptLines, sessionStorageKey]);
+  
+  // Restore recording session after AudioStreamer initialization
+  useEffect(() => {
+    const restoreSession = async () => {
+      if (restoredStatus === 'recording' && audioStreamerRef.current && status === 'stopped') {
+        console.log('🔄 [AUDIOCAPTURE] Attempting to restore previous recording session...');
+        try {
+          // Try to reinitialize and resume recording
+          const audioInitialized = await audioStreamerRef.current.initializeSimpleMicrophoneAudio();
+          if (audioInitialized) {
+            const recordingStarted = await audioStreamerRef.current.startRecording();
+            if (recordingStarted) {
+              setStatus('recording');
+              console.log('✅ [AUDIOCAPTURE] Successfully restored recording session');
+              toast.success('Previous recording session restored');
+              
+              // Clear the restoration flag since we've successfully restored
+              try {
+                localStorage.removeItem(`${sessionStorageKey}-status`);
+              } catch (error) {
+                console.warn('⚠️ Failed to clear restoration flag:', error);
+              }
+            } else {
+              console.warn('⚠️ [AUDIOCAPTURE] Failed to resume recording - will need manual restart');
+              toast.error('Previous session found but needs manual restart');
+            }
+          }
+        } catch (error) {
+          console.error('❌ [AUDIOCAPTURE] Failed to restore recording session:', error);
+          toast.error('Failed to restore previous session - please restart recording');
+        }
+      }
+    };
+
+    // Only attempt restoration if we have an initialized AudioStreamer
+    if (audioStreamerRef.current && restoredStatus === 'recording') {
+      restoreSession();
+    }
+  }, [audioStreamerRef.current, restoredStatus, status, sessionStorageKey]);
+
+  // Notify when questions are generated for a new segment
+  useEffect(() => {
+    if (lastGeneratedSegment && !dismissedSegments.has(lastGeneratedSegment)) {
+      console.log(`🎯 [AUDIOCAPTURE] New questions generated for segment ${lastGeneratedSegment}`);
+      
+      // Show toast notification
+      toast.success(
+        `🎯 Questions generated for Segment ${lastGeneratedSegment}!`,
+        {
+          duration: 4000,
+          icon: '🎯',
+          style: {
+            background: 'rgba(34, 197, 94, 0.1)',
+            border: '1px solid rgba(34, 197, 94, 0.3)',
+            color: '#10b981',
+          },
+        }
+      );
+    }
+  }, [lastGeneratedSegment, dismissedSegments]);
+  
   // Suppress unused variable warning - transcriptCapture works via side effects
   void transcriptCapture;
-  
-  console.log('🔍 [COMPONENT] AudioCapture loaded with transcript capture for meeting:', activeRoom?._id || 'no-room');
+
+  // Log component initialization once per meeting
+  useEffect(() => {
+    if (activeRoom?._id) {
+      console.log('🔍 [COMPONENT] AudioCapture loaded with transcript capture for meeting:', activeRoom._id);
+    }
+  }, [activeRoom?._id]);
 
   // Mock microphone devices for now - could be enhanced with actual device enumeration
   const micDevices = [
@@ -123,6 +265,25 @@ const AudioCapture = () => {
       onTranscript: (message: TranscriptMessage) => {
         console.log('📝 [AUDIOCAPTURE] Received transcript:', message);
         console.log('🎭 [AUDIOCAPTURE] Message role:', message.role, 'displayName:', message.displayName);
+        
+        // CRITICAL FIX: Filter out ASR system messages before creating transcript lines
+        const isASRSystemMessage = 
+          !message.text || 
+          message.text.includes('ASR system connected') ||
+          message.text.includes('[Speech detected') ||
+          message.text.includes('[Speech recognition') ||
+          message.text.includes('[Speech Error:') ||
+          message.text.includes('[Speech recognition is now active') ||
+          message.text.includes('[Speech recognition stopped') ||
+          message.text.includes('[Fallback]') ||
+          message.text.match(/^\[.*\]$/) || // Any message entirely in square brackets
+          message.text.includes('...') || // Incomplete processing messages
+          message.text.trim().length < 3; // Very short messages
+        
+        if (isASRSystemMessage) {
+          console.log('🚫 [AUDIOCAPTURE] Filtered out ASR system message:', message.text);
+          return; // Don't create transcript line for system messages
+        }
         
         // Update debug info
         setDebugInfo(prev => ({
@@ -209,6 +370,22 @@ const AudioCapture = () => {
     }));
 
     return () => {
+      // When component unmounts (navigation away), preserve the recording session
+      // but save current state to localStorage for restoration
+      console.log('🚪 [AUDIOCAPTURE] Component unmounting - preserving session state');
+      
+      if (status === 'recording' && transcriptLines.length > 0) {
+        console.log(`💾 [AUDIOCAPTURE] Preserving ${transcriptLines.length} transcripts for navigation resume`);
+        try {
+          localStorage.setItem(sessionStorageKey, JSON.stringify(transcriptLines));
+          localStorage.setItem(`${sessionStorageKey}-status`, status);
+          console.log('💾 [AUDIOCAPTURE] Session state preserved for navigation');
+        } catch (error) {
+          console.warn('⚠️ [AUDIOCAPTURE] Failed to preserve session state:', error);
+        }
+      }
+      
+      // Only cleanup audio resources, not the recording session data
       audioStreamer.cleanup();
     };
   }, [user, activeRoom]); // Re-add dependencies since we need room to exist
@@ -298,8 +475,18 @@ const AudioCapture = () => {
       const recordingStarted = await audioStreamerRef.current.startRecording();
       if (recordingStarted) {
         console.log('✅ Recording started successfully');
-        toast.success('Recording started successfully');
-        setTranscriptLines([]); // Clear previous transcripts
+        
+        // Check if we have persisted transcripts from previous session
+        const hasPersistedTranscripts = transcriptLines.length > 0;
+        
+        if (hasPersistedTranscripts) {
+          console.log(`📋 [AUDIOCAPTURE] Resuming recording session with ${transcriptLines.length} existing transcripts`);
+          toast.success('Recording resumed with previous transcript');
+        } else {
+          console.log('🆕 [AUDIOCAPTURE] Starting fresh recording session');
+          setTranscriptLines([]); // Only clear for completely new sessions
+          toast.success('Recording started successfully');
+        }
         setDebugInfo(prev => ({
           ...prev,
           speechApiInitialized: true,
@@ -332,7 +519,24 @@ const AudioCapture = () => {
     try {
       await audioStreamerRef.current.stopRecording();
       setStatus('stopped');
-      toast.success('Recording stopped. Transcript saved.');
+      
+      // ONLY clear transcripts when recording is actually stopped
+      console.log('🛑 [AUDIOCAPTURE] Recording stopped - clearing transcript session');
+      setTranscriptLines([]);
+      
+      // Clear from localStorage as well since session is ended
+      try {
+        localStorage.removeItem(sessionStorageKey);
+        localStorage.removeItem(`${sessionStorageKey}-status`); // Also clear status flag
+        console.log('🗑️ [AUDIOCAPTURE] Cleared transcript session and status from localStorage');
+      } catch (error) {
+        console.warn('⚠️ [AUDIOCAPTURE] Failed to clear localStorage:', error);
+      }
+      
+      // Clear auto-generated questions when session ends
+      clearQuestions();
+      
+      toast.success('Recording stopped. Transcript session cleared.');
     } catch (error) {
       console.error('Failed to stop recording:', error);
       toast.error('Failed to stop recording properly');
@@ -385,8 +589,19 @@ const AudioCapture = () => {
   };
 
   const clearTranscript = () => {
+    console.log('🧹 [AUDIOCAPTURE] Manual transcript clear - keeping recording session active');
     setTranscriptLines([]);
-    toast.success('Transcript cleared');
+    
+    // Clear from localStorage but keep recording session active
+    try {
+      localStorage.removeItem(sessionStorageKey);
+      localStorage.removeItem(`${sessionStorageKey}-status`); // Also clear status flag
+      console.log('🗑️ [AUDIOCAPTURE] Cleared persisted transcripts and status from localStorage');
+    } catch (error) {
+      console.warn('⚠️ [AUDIOCAPTURE] Failed to clear localStorage:', error);
+    }
+    
+    toast.success('Transcript cleared (recording continues)');
   };
 
   const getStatusColor = (currentStatus: RecordingStatus) => {
@@ -465,6 +680,55 @@ const AudioCapture = () => {
           </div>
         </div>
 
+        {/* Question Generation Global Notification */}
+        <AnimatePresence>
+          {lastGeneratedSegment && !dismissedSegments.has(lastGeneratedSegment) && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="bg-gradient-to-r from-green-600/20 to-blue-600/20 border border-green-500/40 rounded-xl p-4 backdrop-blur-sm"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="relative flex items-center justify-center w-10 h-10 bg-green-500/20 rounded-full">
+                    <div className="w-4 h-4 bg-green-500 rounded-full animate-pulse"></div>
+                    <div className="absolute inset-0 w-10 h-10 bg-green-500/30 rounded-full animate-ping"></div>
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-green-300 flex items-center gap-2">
+                      🎯 Questions Generated!
+                    </h3>
+                    <p className="text-sm text-gray-300">
+                      Segment {lastGeneratedSegment} processed • {getTotalQuestionCount()} total questions ready
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      You can continue speaking while questions are being prepared for launch
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => window.location.href = '/host/ai-questions'}
+                    className="px-4 py-2 bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 text-white font-medium rounded-lg transition-all shadow-lg"
+                  >
+                    Launch Questions
+                  </motion.button>
+                  <button
+                    onClick={() => setDismissedSegments(prev => new Set([...prev, lastGeneratedSegment]))}
+                    className="p-2 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg transition-colors"
+                    title="Dismiss notification"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Recording Controls */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <GlassCard className="p-6">
@@ -506,7 +770,7 @@ const AudioCapture = () => {
                   Clear Transcript
                 </motion.button>
 
-                <motion.button
+                {/* <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={() => {
@@ -518,9 +782,9 @@ const AudioCapture = () => {
                   className="px-4 py-2 bg-blue-500/20 rounded-lg text-blue-300 hover:bg-blue-500/30 transition-colors duration-200"
                 >
                   Test Speech
-                </motion.button>
+                </motion.button> */}
 
-                <motion.button
+                {/* <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={async () => {
@@ -532,7 +796,7 @@ const AudioCapture = () => {
                   className="px-4 py-2 bg-green-500/20 rounded-lg text-green-300 hover:bg-green-500/30 transition-colors duration-200"
                 >
                   Speech Only
-                </motion.button>
+                </motion.button> */}
 
                 <motion.button
                   whileHover={{ scale: 1.02 }}
@@ -562,7 +826,7 @@ const AudioCapture = () => {
                   {isHostMuted ? 'Unmute Host' : 'Mute Host'}
                 </motion.button>
 
-                <motion.button
+                {/* <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={exportTranscript}
@@ -571,7 +835,7 @@ const AudioCapture = () => {
                 >
                   <Download className="w-4 h-4" />
                   Export
-                </motion.button>
+                </motion.button> */}
               </div>
             </div>
           </GlassCard>
@@ -672,6 +936,12 @@ const AudioCapture = () => {
               Live Transcription
             </h3>
             <div className="flex items-center space-x-2">
+              {transcriptLines.length > 0 && restoredStatus === 'recording' && (
+                <div className="flex items-center space-x-1 bg-green-500/20 text-green-300 px-2 py-1 rounded text-xs">
+                  <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
+                  <span>Session Restored</span>
+                </div>
+              )}
               {status === 'recording' && (
                 <>
                   <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
@@ -680,6 +950,66 @@ const AudioCapture = () => {
               )}
             </div>
           </div>
+
+          {/* Transcript Segmentation Timeline */}
+          {status === 'recording' && (
+            <div className="mb-4 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium text-blue-300">Transcript Segmentation</span>
+                  <span className="text-xs bg-blue-500/20 text-blue-300 px-2 py-1 rounded-full">
+                    Segments: {segmentationState.segmentCount}
+                  </span>
+                  {lastGeneratedSegment && (
+                    <span className="text-xs bg-green-500/20 text-green-300 px-2 py-1 rounded-full flex items-center gap-1">
+                      <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
+                      Questions: {getTotalQuestionCount()}
+                    </span>
+                  )}
+                </div>
+                <div className="text-xs text-gray-400">
+                  Auto-saves on 10s pause • AI questions generated
+                </div>
+              </div>
+
+              {segmentationState.waitingForSpeech ? (
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
+                  <span className="text-sm text-yellow-300">Waiting for transcript...</span>
+                </div>
+              ) : segmentationState.isCurrentlyPaused ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-orange-300">⏸️ Pause Detected</span>
+                    <span className="text-sm text-orange-300">
+                      {Math.ceil(segmentationState.remainingTime / 1000)}s remaining
+                    </span>
+                  </div>
+                  <div className="w-full bg-black/20 rounded-full h-2">
+                    <div 
+                      className="bg-gradient-to-r from-orange-500 to-red-500 h-2 rounded-full transition-all duration-100"
+                      style={{ width: `${segmentationState.timelineProgress}%` }}
+                    />
+                  </div>
+                  <div className="text-xs text-gray-400 text-center">
+                    Timeline: {segmentationState.timelineProgress.toFixed(1)}% complete
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                    <span className="text-sm text-green-300">Monitoring speech activity...</span>
+                  </div>
+                  {lastGeneratedSegment && (
+                    <span className="text-xs text-green-300">
+                      Last questions: Segment {lastGeneratedSegment}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           
           <div 
             ref={transcriptContainerRef}
@@ -742,6 +1072,53 @@ const AudioCapture = () => {
               )}
             </AnimatePresence>
           </div>
+
+          {/* Question Generation Toggle Notification */}
+          {lastGeneratedSegment && !dismissedSegments.has(lastGeneratedSegment) && (
+            <motion.div
+              initial={{ opacity: 0, y: -20, scale: 0.9 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -20, scale: 0.9 }}
+              className="mt-4 p-4 bg-gradient-to-r from-green-500/20 to-blue-500/20 border border-green-500/30 rounded-xl shadow-lg"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="relative">
+                    <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
+                    <div className="absolute inset-0 w-3 h-3 bg-green-500 rounded-full animate-ping opacity-30"></div>
+                  </div>
+                  <div>
+                    <span className="text-sm font-semibold text-green-300">
+                      🎯 Questions generated for Segment {lastGeneratedSegment}
+                    </span>
+                    <p className="text-xs text-gray-300 mt-1">
+                      You can continue speaking. Questions are ready for launch.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => window.location.href = '/host/ai-questions'}
+                    className="px-3 py-1 bg-blue-500/30 hover:bg-blue-500/50 text-blue-300 text-xs rounded-lg transition-colors"
+                  >
+                    View Questions
+                  </button>
+                  <button
+                    onClick={() => setDismissedSegments(prev => new Set([...prev, lastGeneratedSegment]))}
+                    className="p-1 hover:bg-white/10 text-gray-400 hover:text-white rounded transition-colors"
+                    title="Dismiss notification"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+              <div className="mt-2 flex items-center gap-4 text-xs text-gray-400">
+                <span>Total questions: {getTotalQuestionCount()}</span>
+                <span>•</span>
+                <span>Segment {lastGeneratedSegment} processed</span>
+              </div>
+            </motion.div>
+          )}
         </GlassCard>
 
         {/* Debug Panel */}

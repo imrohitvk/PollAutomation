@@ -11,9 +11,18 @@ import LeaderboardView from "../../components/common/LeaderboardView" // <-- IMP
 
 // Define the shape of the data
 interface StudentResult {
-  userId: string; studentName: string; totalPoints: number; accuracy: number;
-  pollsAttempted: number; totalPolls: number; averageTime: number; streak: number;
-  rank?: number; isCurrentUser?: boolean;
+  userId: string; 
+  studentName: string; 
+  totalPoints: number; 
+  accuracy: number;
+  pollsAttempted: number; 
+  totalPolls: number; 
+  averageTime: number; 
+  streak: number; // Current streak
+  correctAnswers: number; // Add this field
+  longestStreak?: number; // Optional longest streak
+  rank?: number; 
+  isCurrentUser?: boolean;
 }
 
 const StudentLeaderboard: React.FC = () => {
@@ -45,6 +54,8 @@ const StudentLeaderboard: React.FC = () => {
         const { studentResults } = res.data;
         setSessionName(res.data.sessionName);
         
+        console.log('📊 [StudentLeaderboard] Raw studentResults:', studentResults);
+        
         const sortedResults = [...studentResults].sort((a: StudentResult, b: StudentResult) => b.totalPoints - a.totalPoints);
         
         const rankedData = sortedResults.map((p: StudentResult, index: number) => ({
@@ -54,6 +65,7 @@ const StudentLeaderboard: React.FC = () => {
         }));
 
         console.log('📊 [StudentLeaderboard] Processed rankedData:', rankedData);
+        console.log('🔍 [StudentLeaderboard] Sample student data:', rankedData[0]);
         setReportData(rankedData);
       } catch (err) {
         console.error('❌ [StudentLeaderboard] Error fetching report:', err);

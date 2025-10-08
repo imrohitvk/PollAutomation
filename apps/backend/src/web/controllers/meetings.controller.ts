@@ -4,6 +4,8 @@ import { EnhancedTranscript } from '../models/enhancedTranscript.model';
 import { GeneratedQuestions } from '../models/questions.model';
 import { Meeting } from '../models/meeting.model';
 import { geminiService } from '../../services/geminiService';
+import { QuestionLaunchService } from '../../services/questionLaunchService';
+import ServiceManager from '../../services/serviceManager';
 import { Types } from 'mongoose';
 import Audio from '../models/audio.model'; // Import Audio model for live transcripts
 
@@ -589,9 +591,11 @@ export const deleteMeetingQuestions = async (req: Request, res: Response) => {
 export const launchQuestion = async (req: Request, res: Response) => {
   try {
     const { id: meetingId, questionId } = req.params;
+    const { timerDuration = 30 } = req.body; // Allow custom timer duration
     const userId = req.user?.id;
 
     console.log(`🚀 [LAUNCH QUESTION] Launching question ${questionId} for meeting: ${meetingId}`);
+    console.log(`⏱️ [LAUNCH QUESTION] Timer duration: ${timerDuration} seconds`);
 
     // Check if meeting exists and user has access (must be host to launch)
     const meeting = await Meeting.findOne({ 
@@ -606,72 +610,48 @@ export const launchQuestion = async (req: Request, res: Response) => {
       });
     }
 
-    // Find the question in generated questions
-    const generatedQuestions = await GeneratedQuestions.findOne({ 
+    // Get Socket.IO instance through ServiceManager
+    const serviceManager = ServiceManager.getInstance();
+    const autoQuestionService = serviceManager.getAutoQuestionService();
+    const io = autoQuestionService.getSocketIOInstance();
+    
+    if (!io) {
+      return res.status(500).json({
+        success: false,
+        message: 'WebSocket service not available'
+      });
+    }
+
+    // Create question launch service
+    const questionLaunchService = new QuestionLaunchService(io);
+
+    // Launch the question (convert to poll and broadcast to students)
+    const result = await questionLaunchService.launchGeneratedQuestion(
       meetingId,
-      'questions.id': questionId 
-    });
-
-    if (!generatedQuestions) {
-      return res.status(404).json({
-        success: false,
-        message: 'Question not found'
-      });
-    }
-
-    // Find the specific question
-    const question = generatedQuestions.questions.find(q => q.id === questionId);
-    if (!question) {
-      return res.status(404).json({
-        success: false,
-        message: 'Question not found in collection'
-      });
-    }
-
-    // Update question status to launched
-    await GeneratedQuestions.updateOne(
-      { meetingId, 'questions.id': questionId },
-      { 
-        $set: { 
-          'questions.$.status': 'launched',
-          'questions.$.launchedAt': new Date()
-        }
-      }
+      questionId,
+      userId!,
+      parseInt(timerDuration.toString())
     );
 
-    // TODO: Broadcast to students via WebSocket
-    // This would integrate with your existing WebSocket system
-    console.log(`📡 [LAUNCH QUESTION] Broadcasting question to students in meeting: ${meetingId}`);
-    
-    // For now, we'll simulate the broadcast
-    const launchData = {
-      type: 'question_launched',
-      meetingId,
-      question: {
-        id: question.id,
-        question: question.questionText,
-        options: question.options || [],
-        timeLimit: 30, // Default 30 seconds
-        points: question.points || 1
-      },
-      launchedAt: new Date(),
-      launchedBy: userId
-    };
+    if (!result.success) {
+      return res.status(404).json({
+        success: false,
+        message: result.error || 'Failed to launch question'
+      });
+    }
 
-    console.log(`✅ [LAUNCH QUESTION] Question launched successfully:`, {
-      questionId,
-      questionText: question.questionText.substring(0, 50) + '...',
-      optionsCount: question.options?.length || 0
-    });
+    console.log(`✅ [LAUNCH QUESTION] Question launched successfully as poll: ${result.poll?._id}`);
 
     res.json({
       success: true,
-      message: 'Question launched successfully',
+      message: 'Question launched successfully to students',
       data: {
         questionId,
         meetingId,
+        pollId: result.poll?._id,
         launchedAt: new Date(),
-        question: launchData.question
+        timerDuration: parseInt(timerDuration.toString()),
+        questionTitle: result.poll?.title ? (result.poll.title.length > 100 ? result.poll.title.substring(0, 100) + '...' : result.poll.title) : 'Unknown Question'
       }
     });
 
@@ -679,7 +659,7 @@ export const launchQuestion = async (req: Request, res: Response) => {
     console.error('❌ [LAUNCH QUESTION] Error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to launch question',
+      message: 'Internal server error',
       error: error instanceof Error ? error.message : 'Unknown error'
     });
   }

@@ -41,6 +41,9 @@ export class AudioStreamer {
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
   private transcriptBuffer: TranscriptMessage[] = []; // Store transcripts for database saving
+  private lastPartialTranscript: string = ''; // Track last partial transcript
+  private partialTranscriptStartTime: number = 0; // Track when partial transcript started
+  private forceFinalTimer: NodeJS.Timeout | null = null; // Timer to force final transcripts
   
   private config: AudioStreamConfig = {
     sampleRate: 16000, // Vosk optimal sample rate
@@ -186,6 +189,44 @@ export class AudioStreamer {
           console.log(`📝 Speech result ${i}: "${transcript}" (Final: ${isFinal}, Confidence: ${confidence.toFixed(2)})`);
           
           if (transcript && transcript.trim().length > 0) {
+            // Track partial transcripts for forced finalization
+            if (!isFinal) {
+              // If this is a new partial transcript, start timing
+              if (this.lastPartialTranscript !== transcript) {
+                this.lastPartialTranscript = transcript;
+                this.partialTranscriptStartTime = Date.now();
+                
+                // Clear any existing timer and start a new one
+                if (this.forceFinalTimer) {
+                  clearTimeout(this.forceFinalTimer);
+                }
+                
+                // Force finalization after 5 seconds of the same partial transcript
+                this.forceFinalTimer = setTimeout(() => {
+                  console.log('⏰ [SPEECH] Forcing final transcript after 5 seconds');
+                  const forcedFinalMessage: TranscriptMessage = {
+                    type: 'final',
+                    meetingId: this.meetingId,
+                    role: this.role,
+                    participantId: this.participantId,
+                    text: this.lastPartialTranscript,
+                    startTime: this.partialTranscriptStartTime,
+                    endTime: Date.now(),
+                    timestamp: Date.now()
+                  };
+                  this.transcriptBuffer.push(forcedFinalMessage);
+                  this.callbacks.onTranscript(forcedFinalMessage);
+                }, 5000);
+              }
+            } else {
+              // Clear force final timer if we get a real final result
+              if (this.forceFinalTimer) {
+                clearTimeout(this.forceFinalTimer);
+                this.forceFinalTimer = null;
+              }
+              this.lastPartialTranscript = '';
+            }
+
             // Create transcript message
             const transcriptMessage: TranscriptMessage = {
               type: isFinal ? 'final' : 'partial',
@@ -952,6 +993,13 @@ export class AudioStreamer {
   async stopRecording(): Promise<void> {
     console.log('🛑 Stopping recording...');
     this.isRecording = false;
+
+    // Clear force final timer
+    if (this.forceFinalTimer) {
+      clearTimeout(this.forceFinalTimer);
+      this.forceFinalTimer = null;
+      console.log('⏰ Cleared force final timer');
+    }
 
     // Stop speech recognition if running
     if (this.speechRecognition) {

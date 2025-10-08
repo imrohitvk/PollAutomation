@@ -294,8 +294,10 @@ export const setupWebSocket = (io: Server) => {
 
 
 
-       socket.on('student-submit-vote', async ({ roomId, pollId, answer, timeTaken }) => {
+       socket.on('student-submit-vote', async (voteData) => {
+    const { roomId, pollId, answer, timeTaken } = voteData;
     console.log('📝 [VOTE] Received student-submit-vote:', { roomId, pollId, answer, timeTaken, userId: socket.userId });
+    console.log('📝 [VOTE] Raw data received:', voteData);
     
     if (!socket.userId) {
         console.log('❌ [VOTE] No userId in socket');
@@ -304,7 +306,13 @@ export const setupWebSocket = (io: Server) => {
 
     if (!roomId) {
         console.log('❌ [VOTE] No roomId provided');
+        console.log('❌ [VOTE] Full received data:', JSON.stringify(voteData, null, 2));
         return socket.emit('vote-error', { message: "Room ID is required" });
+    }
+
+    if (!pollId) {
+        console.log('❌ [VOTE] No pollId provided');
+        return socket.emit('vote-error', { message: "Poll ID is required" });
     }
 
     const poll = await Poll.findById(pollId);
@@ -319,11 +327,72 @@ export const setupWebSocket = (io: Server) => {
         return socket.emit('vote-error', { message: "You have already voted on this poll." });
     }
 
-    const isCorrect = poll.correctAnswer === answer;
+    // DETAILED ANSWER COMPARISON DEBUGGING
+    console.log('🔍 [VOTE] DETAILED ANSWER COMPARISON:');
+    console.log('🔍 [VOTE] Poll Type:', poll.type);
+    console.log('🔍 [VOTE] Poll Options:', poll.options);
+    console.log('🔍 [VOTE] Stored correctAnswer:', `"${poll.correctAnswer}"`);
+    console.log('🔍 [VOTE] Student submitted answer:', `"${answer}"`);
+    console.log('🔍 [VOTE] correctAnswer length:', poll.correctAnswer?.length);
+    console.log('🔍 [VOTE] answer length:', answer?.length);
+    console.log('🔍 [VOTE] Exact match (===):', poll.correctAnswer === answer);
+    console.log('🔍 [VOTE] Case-insensitive match:', poll.correctAnswer?.toLowerCase() === answer?.toLowerCase());
+    console.log('🔍 [VOTE] Trimmed match:', poll.correctAnswer?.trim() === answer?.trim());
+    console.log('🔍 [VOTE] Trimmed + case-insensitive:', poll.correctAnswer?.trim().toLowerCase() === answer?.trim().toLowerCase());
     
-    // Example scoring logic
-    const timeBonus = isCorrect ? Math.max(0, Math.floor((poll.timerDuration - timeTaken) * 1.5)) : 0;
-    const points = isCorrect ? 100 + timeBonus : 0;
+    // Enhanced comparison logic to handle potential formatting differences
+    // First try exact match, then try normalized match
+    let isCorrect = poll.correctAnswer === answer;
+    
+    if (!isCorrect) {
+        // Try normalized comparison (trim whitespace and normalize case)
+        const normalizedCorrect = poll.correctAnswer?.trim().toLowerCase();
+        const normalizedAnswer = answer?.trim().toLowerCase();
+        isCorrect = normalizedCorrect === normalizedAnswer;
+        
+        if (isCorrect) {
+            console.log('✅ [VOTE] Match found with normalization (trim + lowercase)');
+        } else {
+            console.log('❌ [VOTE] No match even with normalization');
+            // Additional debugging for true/false questions
+            if (poll.type === 'truefalse') {
+                console.log('🔍 [VOTE] True/False specific check:');
+                console.log('🔍 [VOTE] correctAnswer chars:', poll.correctAnswer?.split('').map((c: string) => `'${c}' (${c.charCodeAt(0)})`));
+                console.log('🔍 [VOTE] answer chars:', answer?.split('').map((c: string) => `'${c}' (${c.charCodeAt(0)})`));
+            }
+        }
+    } else {
+        console.log('✅ [VOTE] Exact match found');
+    }
+    
+    // Enhanced scoring logic based on time and correctness
+    let points = 0;
+    if (isCorrect) {
+        // Base points for correct answer
+        const basePoints = 100;
+        
+        // Time bonus: more points for faster answers (up to 50 extra points)
+        // Formula: (timeRemaining / totalTime) * maxBonus
+        const timeRemainingPercent = Math.max(0, (poll.timerDuration - timeTaken) / poll.timerDuration);
+        const timeBonus = Math.floor(timeRemainingPercent * 50);
+        
+        points = basePoints + timeBonus;
+        console.log('✅ [VOTE] Correct answer! Base: 100, Time remaining %:', (timeRemainingPercent * 100).toFixed(1), 'Time bonus:', timeBonus, 'Total:', points);
+    } else {
+        points = 0;
+        console.log('❌ [VOTE] Incorrect answer, no points awarded');
+    }
+    
+    console.log('📊 [VOTE] Vote details:', {
+        pollId,
+        userId: socket.userId,
+        answer,
+        correctAnswer: poll.correctAnswer,
+        isCorrect,
+        timeTaken,
+        timerDuration: poll.timerDuration,
+        points
+    });
     
     // Save the report
     console.log('💾 [VOTE] Saving report with data:', { roomId, pollId, userId: socket.userId, answer, isCorrect, timeTaken, points });
@@ -587,18 +656,40 @@ async function generateAndSaveSessionReport(roomId: string) {
         const averageTime = pollsAttempted > 0 ? totalTimeTaken / pollsAttempted : 0;
         const accuracy = pollsAttempted > 0 ? (correctAnswers / pollsAttempted) * 100 : 0;
         
-        // Calculate longest streak
+        // Calculate BOTH longest streak and current streak
         let longestStreak = 0;
         let currentStreak = 0;
+        let tempStreak = 0;
+        
+        // Calculate longest streak (maximum consecutive correct answers ever)
         for (const report of userReports) {
             if (report.isCorrect) {
-                currentStreak++;
+                tempStreak++;
+                longestStreak = Math.max(longestStreak, tempStreak);
             } else {
-                longestStreak = Math.max(longestStreak, currentStreak);
-                currentStreak = 0;
+                tempStreak = 0;
             }
         }
-        longestStreak = Math.max(longestStreak, currentStreak);
+        
+        // Calculate current streak (consecutive correct answers from the end)
+        for (let i = userReports.length - 1; i >= 0; i--) {
+            if (userReports[i].isCorrect) {
+                currentStreak++;
+            } else {
+                break;
+            }
+        }
+
+        console.log('📊 [SessionReport] User stats:', {
+            name: userDetails.fullName,
+            totalPoints,
+            correctAnswers,
+            pollsAttempted,
+            accuracy: accuracy.toFixed(2),
+            longestStreak,
+            currentStreak,
+            averageTime: averageTime.toFixed(2)
+        });
 
         studentResults.push({
             userId: userDetails._id,
@@ -608,7 +699,8 @@ async function generateAndSaveSessionReport(roomId: string) {
             pollsAttempted,
             correctAnswers,
             totalPoints,
-            streak: longestStreak,
+            streak: currentStreak, // Use current streak for leaderboard display
+            longestStreak, // Also include longest streak for reference
             averageTime: parseFloat(averageTime.toFixed(2)),
             accuracy: parseFloat(accuracy.toFixed(2)),
         });

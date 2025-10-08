@@ -1,22 +1,20 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
-export interface IQuestionOption {
-  text: string;
-  isCorrect: boolean;
-}
-
 export interface IQuestion {
   id: string;
   type: 'multiple_choice' | 'true_false' | 'short_answer' | 'essay';
   difficulty: 'easy' | 'medium' | 'hard';
   questionText: string;
-  options?: IQuestionOption[]; // For multiple choice and true/false
-  correctIndex?: number; // For multiple choice questions
+  options?: string[]; // Array of option strings for multiple choice and true/false
+  correctIndex?: number; // For multiple choice questions (0-based index)
   correctAnswer?: string; // For short answer questions
   explanation: string;
   points?: number;
   category?: string;
   tags?: string[];
+  status?: 'draft' | 'launched'; // Track if question has been launched
+  launchedAt?: Date; // When the question was launched
+  pollId?: string; // Link to the created poll
 }
 
 export interface IQuestionConfig {
@@ -31,6 +29,8 @@ export interface IQuestionConfig {
 export interface IGeneratedQuestions extends Document {
   meetingId: string;
   hostId: string;
+  segmentId?: string; // Link to specific segment
+  segmentNumber?: number; // Segment number for easy reference
   generatedAt: Date;
   config: IQuestionConfig;
   questions: IQuestion[];
@@ -55,18 +55,6 @@ export interface IGeneratedQuestions extends Document {
   updatedAt: Date;
 }
 
-const QuestionOptionSchema = new Schema({
-  text: {
-    type: String,
-    required: true
-  },
-  isCorrect: {
-    type: Boolean,
-    required: true,
-    default: false
-  }
-}, { _id: false });
-
 const QuestionSchema = new Schema({
   id: {
     type: String,
@@ -86,7 +74,9 @@ const QuestionSchema = new Schema({
     type: String,
     required: true
   },
-  options: [QuestionOptionSchema],
+  options: [{
+    type: String
+  }],
   correctIndex: {
     type: Number,
     required: false,
@@ -112,7 +102,20 @@ const QuestionSchema = new Schema({
   },
   tags: [{
     type: String
-  }]
+  }],
+  status: {
+    type: String,
+    enum: ['draft', 'launched'],
+    default: 'draft'
+  },
+  launchedAt: {
+    type: Date,
+    required: false
+  },
+  pollId: {
+    type: String,
+    required: false
+  }
 }, { _id: false });
 
 const QuestionConfigSchema = new Schema({
@@ -160,6 +163,16 @@ const GeneratedQuestionsSchema: Schema = new Schema({
   hostId: {
     type: String,
     required: true,
+    index: true
+  },
+  segmentId: {
+    type: String,
+    required: false,
+    index: true
+  },
+  segmentNumber: {
+    type: Number,
+    required: false,
     index: true
   },
   generatedAt: {

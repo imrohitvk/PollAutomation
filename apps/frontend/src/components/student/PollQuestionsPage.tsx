@@ -29,6 +29,7 @@ const PollQuestionsPage: React.FC = () => {
   const [totalParticipants, setTotalParticipants] = useState(0);
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [roomJoined, setRoomJoined] = useState(false);
+  const [actualRoomId, setActualRoomId] = useState<string | null>(null); // Store the actual room ID
 
   // --- Gamification State ---
   const [score, setScore] = useState(0);
@@ -91,9 +92,15 @@ const PollQuestionsPage: React.FC = () => {
           if (response?.error) {
             toast.error(`Failed to join room: ${response.error}`);
             setRoomJoined(false);
-          } else if (response?.success) {
+          } else if (response?.success && response?.room) {
             console.log('✅ [STUDENT] Successfully joined room from PollQuestionsPage');
             console.log('🏠 [STUDENT] Room details:', response.room);
+            
+            // Store the actual room ID from the backend response
+            const roomId = response.room._id || response.room.id;
+            setActualRoomId(roomId);
+            console.log('💾 [STUDENT] Stored actual room ID:', roomId);
+            
             setRoomJoined(true);
             toast.success(`Joined "${roomInfo.name}" successfully!`);
           }
@@ -170,18 +177,28 @@ const PollQuestionsPage: React.FC = () => {
 //       navigate('/student/join-poll');
 //     }    };
 // ... inside useEffect for socket events ...
-const handleSessionEnded = (data: { message: string }) => {
+  const handleSessionEnded = (data: { message: string; sessionId?: string }) => {
     toast.error(data.message || "The host has ended the session.", {
         duration: 5000,
     });
-    // Navigate the user to the leaderboard, passing the sessionId
-    if (roomInfo) {
-      navigate('/student/leaderboard', { state: { sessionId: roomInfo._id } });
+    // Use the sessionId from the server response, fallback to actualRoomId if needed
+    const sessionIdToUse = data.sessionId || actualRoomId || roomInfo._id;
+    console.log('🏁 [STUDENT] Session ended, navigating to leaderboard with sessionId:', sessionIdToUse);
+    console.log('🏁 [STUDENT] Session data received:', data);
+    console.log('🏁 [STUDENT] Available IDs:', { 
+      serverSessionId: data.sessionId, 
+      actualRoomId, 
+      roomInfoId: roomInfo._id 
+    });
+    
+    if (sessionIdToUse) {
+      navigate('/student/leaderboard', { state: { sessionId: sessionIdToUse } });
     } else {
-      // Fallback if roomInfo is somehow lost
+      // Fallback if sessionId is somehow lost
+      console.error('❌ [STUDENT] No sessionId available for leaderboard!');
       navigate('/student/join-poll');
     }
-};
+  };
 
     socket.on('poll-started', handlePollStarted);
     socket.on('poll-ended', handlePollEnded);
@@ -220,10 +237,20 @@ const handleSessionEnded = (data: { message: string }) => {
     setSelectedAnswer(index);
     
     const timeTaken = currentPoll.timerDuration - timeLeft;
-    const voteData = { roomId: roomInfo._id, pollId: currentPoll._id, answer: option, timeTaken };
+    
+    // Use actualRoomId if available, otherwise fall back to roomInfo._id
+    const roomIdToUse = actualRoomId || roomInfo._id;
+    const voteData = { roomId: roomIdToUse, pollId: currentPoll._id, answer: option, timeTaken };
     
     console.log('📤 [STUDENT] Emitting student-submit-vote:', voteData);
     console.log('🏠 [STUDENT] RoomInfo details:', roomInfo);
+    console.log('🆔 [STUDENT] Using room ID:', roomIdToUse, '(actualRoomId:', actualRoomId, ', roomInfo._id:', roomInfo._id, ')');
+    
+    if (!roomIdToUse) {
+      console.error('❌ [STUDENT] No room ID available for vote submission!');
+      toast.error('Unable to submit vote - room ID missing');
+      return;
+    }
     
     socket.emit('student-submit-vote', voteData);
 
