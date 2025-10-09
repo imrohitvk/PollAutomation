@@ -185,6 +185,8 @@ export const apiService = {
    // --- ADD THESE TWO LINES FOR THE HOST ---
   getHostSessionReports: () => api.get('/session-reports'), // Gets the list of reports
   getSessionReportById: (reportId: string) => api.get(`/session-reports/${reportId}`), // Gets a single detailed report
+  // Stats
+  getHostStats: () => api.get('/stats/host'),
 
   // Transcripts (ASR)
   getTranscriptsByMeeting: (meetingId: string, params?: { type?: 'partial' | 'final', role?: 'host' | 'participant', participantId?: string }) => 
