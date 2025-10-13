@@ -3,40 +3,42 @@
 import type React from "react"
 import { Play, BarChart3, Trophy, Plus } from "lucide-react"
 import GlassCard from "../GlassCard"
+import { useNavigate } from 'react-router-dom'
 
 interface QuickAccessCardsProps {
   onSectionChange: (section: string) => void
 }
 
 const QuickAccessCards: React.FC<QuickAccessCardsProps> = ({ onSectionChange }) => {
+  const navigate = useNavigate()
   const quickActions = [
     {
       title: "Join Next Poll",
       description: "Participate in the latest poll and earn points",
       icon: Play,
       color: "from-primary-500 to-purple-600",
-      action: () => onSectionChange("join-poll"),
+      action: () => navigate('/student/join-poll'),
     },
     {
       title: "View Latest Results",
       description: "Check out the results from recent polls",
       icon: BarChart3,
       color: "from-secondary-500 to-blue-600",
-      action: () => onSectionChange("history"),
+      action: () => navigate('/student/history'),
     },
     {
       title: "Check Your Rank",
       description: "See where you stand on the leaderboard",
       icon: Trophy,
       color: "from-accent-500 to-teal-600",
-      action: () => onSectionChange("leaderboard"),
+      action: () => navigate('/student/leaderboard'),
     },
     {
       title: "View Achievements",
       description: "Check your badges and accomplishments",
       icon: Plus,
       color: "from-orange-500 to-red-600",
-      action: () => onSectionChange("achievements"),
+      action: () => navigate('/student/achievements'),
     },
   ]
 

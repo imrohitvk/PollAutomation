@@ -185,6 +185,11 @@ export const apiService = {
    // --- ADD THESE TWO LINES FOR THE HOST ---
   getHostSessionReports: () => api.get('/session-reports'), // Gets the list of reports
   getSessionReportById: (reportId: string) => api.get(`/session-reports/${reportId}`), // Gets a single detailed report
+  // Student: get count of sessions joined by the authenticated user
+  getMyJoinedSessionsCount: () => api.get('/session-reports/me'),
+  getMyRecentSessions: () => api.get('/session-reports/me/recent'),
+  // Leaderboard (aggregated per-user stats)
+  getLeaderboard: () => api.get('/reports/leaderboard'),
   // Stats
   getHostStats: () => api.get('/stats/host'),
 

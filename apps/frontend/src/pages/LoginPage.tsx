@@ -32,9 +32,9 @@ const LoginPage = () => {
     try {
       await login(data.email, data.password);
       if (redirect === 'create-poll') {
-        navigate('/host/create-poll');
+        navigate('/host');
       } else if (redirect === 'join-poll') {
-        navigate('/student/join-poll');
+        navigate('/student');
       } else {
         navigate('/host');
       }
