@@ -179,6 +179,7 @@ export const apiService = {
   getRoomById: (roomId: string) => api.get(`/rooms/${roomId}`), // For verifying stored room
   sendInvites: (roomId: string, formData: FormData) => api.post(`/rooms/${roomId}/invite`, formData),
   getLiveParticipants: (roomId: string) => api.get(`/rooms/${roomId}/participants`),
+  getAvailableSessionsWithPolls: () => api.get('/rooms/available/sessions'),
 // getHostSessionReports: () => axios.get('/api/reports/host-sessions'),
   // Reports
   getReportForSession: (sessionId: string) => api.get(`/session-reports/session/${sessionId}`),
@@ -188,6 +189,8 @@ export const apiService = {
   // Student: get count of sessions joined by the authenticated user
   getMyJoinedSessionsCount: () => api.get('/session-reports/me'),
   getMyRecentSessions: () => api.get('/session-reports/me/recent'),
+  getStudentPollHistory: () => api.get('/session-reports/me/polls'),
+  getDebugSessionData: () => api.get('/session-reports/me/debug'),
   // Leaderboard (aggregated per-user stats)
   getLeaderboard: () => api.get('/reports/leaderboard'),
   // Stats
