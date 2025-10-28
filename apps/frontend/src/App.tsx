@@ -1,5 +1,4 @@
 // apps/frontend/src/App.tsx
-import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
@@ -21,7 +20,6 @@ import HomePage from './pages/HomePage';
 import CreateManualPoll from './pages/CreateManualPoll';
 import CreatePollPage from './pages/CreatePollPage';
 import ContactUs from './pages/ContactUs';
-import ChangePassword from './components/student/ChangePassword';
 import GuestPage from './pages/guest/GuestPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 
@@ -36,7 +34,6 @@ import NotificationPage from './components/student/NotificationPage';
 import SettingsStudent from './components/student/Settings';
 import StudentLeaderboard from './components/student/StudentLeaderboard';
 import DashboardHomePage from './components/student/DashboardHomePage';
-import ActiveSessions from './components/student/ActiveSessions';
 
 function App() {
   return (

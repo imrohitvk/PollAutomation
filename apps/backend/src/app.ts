@@ -22,6 +22,7 @@ import saveQuestionsRouter from './web/routes/save_questions';
 import pollConfigRoutes from './web/routes/poll.routes';
 import transcriptsRouter from './web/routes/transcripts';
 import sessionReportRoutes from './web/routes/sessionReport.routes'; // <-- NEW IMPORT
+import achievementsRoutes from './web/routes/achievements.routes'; // <-- ACHIEVEMENTS IMPORT
 
 dotenv.config();
 connectDB();
@@ -65,6 +66,7 @@ app.use('/api/transcripts', transcriptRoutes); // ASR transcripts
 app.use('/api/meetings', meetingsRoutes); // AI Questions & Meetings
 app.use('/api/segments', segmentsRoutes); // Transcript segments
 app.use('/api/session-reports', sessionReportRoutes); // <-- NEW ROUTE
+app.use('/api/achievements', achievementsRoutes); // <-- ACHIEVEMENTS ROUTE
 app.use('/api/stats', statsRoutes); // <-- host/dashboard stats
 
 app.use(errorHandler);
