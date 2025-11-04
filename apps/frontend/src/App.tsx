@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { LoadingProvider } from './contexts/LoadingContext';
+import { NotificationProvider } from './contexts/NotificationContext';
 import AuthGuard from './components/AuthGuard';
 import LoadingScreen from './components/LoadingScreen';
 import LoginPage from './pages/LoginPage';
@@ -40,7 +41,8 @@ function App() {
     <ThemeProvider>
       <AuthProvider>
         <LoadingProvider>
-          <Router>
+          <NotificationProvider>
+            <Router>
             <div className="min-h-screen bg-gradient-to-br from-dark-900 via-dark-800 to-dark-900">
               <LoadingScreen />
               <Routes>
@@ -106,6 +108,7 @@ function App() {
     </Routes>
             </div>
           </Router>
+          </NotificationProvider>
         </LoadingProvider>
       </AuthProvider>
     </ThemeProvider>

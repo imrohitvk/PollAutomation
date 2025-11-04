@@ -18,7 +18,8 @@ import {
     updateProfile, 
     changePassword, 
     deleteAccount,
-    uploadAvatar
+    uploadAvatar,
+    deleteAvatar
 } from '../controllers/user.controller';
 import { authenticate } from '../middlewares/auth.middleware';
 
@@ -32,6 +33,7 @@ router.get('/profile', authenticate, getProfile);
 router.put('/profile', authenticate, updateProfile); // This route will handle text fields
 // We will now handle the image upload separately via this route.
 router.post('/profile/avatar', authenticate, upload.single('avatar'), uploadAvatar);
+router.delete('/profile/avatar', authenticate, deleteAvatar);
 router.post('/change-password', authenticate, changePassword);
 router.post('/delete-account', authenticate, deleteAccount);
 
